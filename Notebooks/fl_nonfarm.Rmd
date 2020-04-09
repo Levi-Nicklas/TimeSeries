@@ -1,0 +1,619 @@
+---
+title: "Problem Set 5"
+author: "Levi C. Nicklas"
+date: "4/3/2020"
+output: pdf_document
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = F, warning = F)
+
+library(tidyverse)
+library(lubridate)
+
+set.seed(23)
+```
+
+
+# Introduction
+In this homework, I use concepts from class to forecast Florida non-farm employment. This particular homework I am focusing on model selection techniques, as I prepare for my final project. By building upon ideas from earlier assignments, I will be aiming to out perform my problem set 4 forecasts. All of this assignment was completed in the programming language `R` and was carefully built from basics in `R`, so as to not rely on packages without a firm understanding of their implementations. This was done to ensure that work is in line with the concepts covered in _STATA_ throughout class. The code will all be available online in a code repository (see appendicies). 
+
+# Data Source and Pre-Processing
+
+```{r Read in Data and Clean}
+raw_data <- readxl::read_xls("ProblemSet5.xls", sheet = 2)
+
+# First I will get rid of an NA values that came from the 
+# series not beginning at the same point in time.
+
+df <- raw_data %>% 
+  drop_na()
+
+# Second, I am changing the column headers into something
+# that is easier to read.
+
+colnames(df) <- c("date", "fl_bp", "fl_lf", "fl_nonfarm", "us_epr_prime")
+
+# Third, I only want the last 30 years of data (post 1990).
+df <- df %>% 
+  filter(1990 < lubridate::year(date))
+```
+
+Again, I pull data from FRED (Federal Reserve Economic Data), using the same time series for this assignment as previous assignments. Data was pulled on April 3, 2020, and contains values up to February. The data are non-seasonally adjusted monthly measurements spanning 1948-2020. The variables of concern for the analysis are:
+
+- ($y_1$) Total Non-farm Employees in the State of Florida.
+- ($x_1$) Civilian Labor Force in the State of Florida.
+- ($x_2$) New Private Housing Unit Permits Issued in the State of Florida.
+- ($x_3$) Employment Population Ratio (Ages 25-54) for USA. 
+
+Variable | Date Range | Source | No. of Observations
+:---------:|:------------:|:--------:|:---------------------:
+$y_1$    | 1990-2020  | FRED$^{1}$  | $359$
+$x_1$    | 1976-2020  | FRED$^{1}$  | $527$
+$x_2$    | 1988-2020  | FRED$^{1}$  | $383$
+$x_3$    | 1948-2020  | USBLS$^{2}$  | $864$
+
+Below, we see the time series plotted seperately.
+
+```{r TS lines, echo = F}
+df %>% 
+  pivot_longer(c(fl_bp, fl_lf, fl_nonfarm, us_epr_prime)) %>% 
+  drop_na() %>% 
+  ggplot(aes(date, value, color = name))+
+  geom_line()+
+  facet_wrap(~name, scales = "free")+
+  scale_color_brewer(palette = "Set1") +
+  theme_classic() +
+  labs(x = "Date", y = "Nominal Value",
+       title = "Figure 1: Data Time Series Plots",
+       color = "Variable")
+```
+
+From previous assignments, based on autocorrelograms and partial autocorrellograms, we found that we need to take the first difference of the data to address autocorrelation in the data. We also took the log of each value. For this analysis, I will repeat these steps and the models will be built upon the data under those transforms. After performing the transforms, let's look at the time series again (See Figure 2). Here we see that we have mostly stationary series now, and we are ready for modeling and further analysis. 
+
+```{r Transform the Data}
+# Also, I'll diference the data.
+df <- df %>% 
+  mutate(d.fl_bp = log(fl_bp) - log(lag(fl_bp,1))) %>% 
+  mutate(d.fl_lf = log(fl_lf) - log(lag(fl_lf,1))) %>% 
+  mutate(d.fl_nonfarm = log(fl_nonfarm) - log(lag(fl_nonfarm,1))) %>% 
+  mutate(d.us_epr = log(us_epr_prime) - log(lag(us_epr_prime,1))) %>% 
+  drop_na()
+
+# Last for cleaning, I'll add monthly indicators.
+df <- df %>% 
+  mutate(month = month(date)) %>% 
+  mutate(Jan = (month == 1),
+         Feb = (month == 2),
+         Mar = (month == 3),
+         Apr = (month == 4),
+         May = (month == 5),
+         Jun = (month == 6),
+         Jul = (month == 7),
+         Aug = (month == 8),
+         Sep = (month == 9),
+         Oct = (month == 10),
+         Nov = (month == 11),
+         Dec = (month == 12))
+```
+
+```{r TS lines - Revised}
+df %>% 
+  pivot_longer(c(d.fl_bp, d.fl_lf, d.fl_nonfarm, d.us_epr)) %>% 
+  drop_na() %>% 
+  ggplot(aes(date, value, color = name))+
+  geom_line()+
+  facet_wrap(~name, scales = "free")+
+  scale_color_brewer(palette = "Set1") +
+  theme_classic() +
+  labs(x = "Date", y = "First Differenced Log Value",
+       title = "Figure 2: Transformed Data Time Series Plots",
+       color = "Variable")
+```
+
+# Model Selection
+To begin, we will consider the best model from the previous assignment (Problem Set 4):
+
+$\begin{aligned}
+\Delta \ln (y_t) =& \sum_{i=1}^{12} l_i \Delta \ln(y_{t-i}) + \sum_{i=1}^{2} l_{1,i} \Delta \ln(x_{1,t-i}) + l_{1,12} \Delta \ln(x_{1,t-12}) + \\
+& \sum_{i=1}^{2} l_{2,i} \Delta \ln(x_{2,t-i}) + l_{2,12} \Delta \ln(x_{2,t-12})+ \\
+& \sum_{i=1}^{2} l_{3,i} \Delta \ln(x_{3,t-i}) +l_{3,12} \Delta \ln(x_{3,t-12})+ \\
+&\sum_{i=1}^{12} m_i + t + \epsilon
+\end{aligned}$
+
+
+### Genetic Algorithm
+The above model will serve as our goal to out perform by the end of the paper. To find a model that will outperform this one, I will use a method that we did not cover in class. I had intended to implement something similar to `GSREG` from STATA, but in `R`, however I was hitting a dead end. Instead of resorting to forward/backward selection, or trying to apply shrinkage methods, I decided to search the space that `GSREG` would have, but in a smarter way. For this search, I use a genetic algorithm to determine the optimal model. This is done by treating the inclusion or exclusion of each independent variable, and each its lagged values, as a binary decision. The genetic algorithm is then generating $n$ models that are defined by a random binary string, where each bit represents the inclusion or exclusion of the independent variable in the corresponding position. The best models then have "offspring" amongst each other, and there is a chance for mutation which I control, and then those offspring share the characteristics of their "ancestors". This process repeats and _survival of the fittest_ takes place. By doing this we are really solving a combinatorial optimization problem, which should help us identify a best performing model. 
+
+**Aside:**
+
+> I had this idea once I realized I could not simply exhaustively search the space of all possible models ($<2^{30}$) since it was far too large. I had considered a branch and bound, but this seemed original and fresh to me. Sadly, while this was original to me, others before me have done this; at least this then confirmed my suspicion that this would work.
+
+
+```{r Model Selection Prep}
+# First, I need to construct a df of all the possible vars
+# that I could possibly need for regression. This will be
+# all lags, 0-24, for each variable. In addition, each 
+# model will have monthly indicators.
+
+# Get all the variables of concern.
+source("../TS&F-R-Pack/functions/generate_lag_terms.R")
+all_vars <- colnames(df)[6:9]
+lags_df <- generate_lag_terms(var_names = all_vars, max_lags = 24)
+# I am going to thin out the lags I made... I don't really want all 
+# of these. 
+my_lags <- c(1,2,3,6,9,12,15,18,21,24)
+lags_df <- lags_df[my_lags,]
+
+# Get all the seasonal indicator labels.
+source("../TS&F-R-Pack/functions/build_seasonal_indicators.R")
+seasons_df <- build_seasonal_indicators(seasonality = "monthly")
+
+## Construct models df.
+# Build all terms.
+all_terms <- c(lags_df$d.fl_bp,
+               lags_df$d.fl_lf,
+               lags_df$d.fl_nonfarm,
+               lags_df$d.us_epr,
+               as.character(seasons_df$months))
+
+lag_terms <- c(lags_df$d.fl_bp,
+               lags_df$d.fl_lf,
+               lags_df$d.fl_nonfarm,
+               lags_df$d.us_epr)
+```
+
+```{r Genetic Algorithm Selection}
+# Build a function for model selection using
+# the genetic algorithm. 
+
+# First, I will need to define a fitness function.
+# Take a string binary string of length n,
+# number of features possible, and construct a 
+# regression line, and then evaluate a metric:
+# OOS RMSE, AIC, BIC (how can I rollup all of these?).
+
+# so.. I need to combine these two functions into a "fitness" 
+# function for the GA to work.
+library(GA)
+# ga_fitness <- function(binary_vector){
+#   ### This function is a combination of the two functions sourced below.
+#   ### The goal is to produce a "fitness" function by which the population
+#   ### will be judged. So, take a binary string --> OOS_rmse. 
+#   
+#   ### INPUTS:
+#   ### Please read the sourced function's documentation.
+#   
+#   source("../TS&F-R-Pack/functions/model_from_binary_vector.R")
+#   source("../TS&F-R-Pack/functions/OOS_rmse.R")
+#   
+#   # Add the set seasonal indicators I want to the binary vector.
+#   
+#   binary_vector <- append(binary_vector, c(rep(T,11),F), after = 10*4)
+#   
+#   model_t <- model_from_binary_vector(binary_vector = binary_vector, 
+#                                       features_list = all_terms,
+#                                       training_data = df[1:325, ],
+#                                       dependent_var = "d.fl_nonfarm")
+#   
+#   # GA function will MAXIMIZE, so flip the function.
+#   metric <- -OOS_rmse(model_to_eval = model_t, 
+#                      OOS_data = df, 
+#                      dependent_var_position = 8)
+#   return(metric)
+# }
+# 
+# 
+# # Run GA
+# GA_i1 <- GA::ga(type = "binary",
+#        upper = rep(1, length(lag_terms)),
+#        lower = rep(0, length(lag_terms)),
+#        nBits = length(lag_terms),
+#        fitness = ga_fitness,
+#        popSize = 100,
+#        maxiter = 300,
+#        pmutation = 0.05,
+#        pcrossover = 0.8,
+#        elitism = 0.05,
+#        optim = T,
+#        run = 75,
+#        keepBest = T
+#        )
+# saveRDS(GA_i1,"genetic_alg_result.RDS")
+GA_i1 <- readRDS("genetic_alg_result.RDS")
+
+#summary(GA_i1)
+plot(GA_i1)
+# List of all solutions at each iter.
+#GA_i1@bestSol
+# Best sol'n found.
+best_sol <- append(GA_i1@solution, c(rep(T,11),F), after = 10*4)
+
+#best_model_i1 <- model_from_binary_vector(best_sol,
+#                         features_list = all_terms,
+#                         training_data = df[1:325,],
+#                         dependent_var = "d.fl_nonfarm")
+#summary(best_model_i1)
+```
+
+At this point, I will take a selection of the **best** models from the genetic algorithm, and judge them again to select 5 models that we will check using rolling window root mean square error (RWRMSE). 
+
+### Additional Assessment 
+In this additional assessment, I will examine the in sample AIC and BIC metrics for each model that I saved from the genetic algorithm reuslts. At each timestep, I saved the best model in the population. Checking the best model at each step will give us a fairly diverse set of models to evaluate, as opposed to just assessing the final population, which could be converging to the ideal model or just a local minimum. Also, I am looking for a good model, but not a complicated model; I want to find the best model according to these metrics, but also one that is simple. 
+
+```{r AIC-BIC Measures}
+source("../TS&F-R-Pack/functions/AIC_BIC_BinaryRep.R")
+
+population <- list()
+
+for(i in 1:nrow(GA_i1@population)){
+  population[[i]] <- GA_i1@population[i,]
+}
+
+# Allocate Storage
+AIC_BIC_metrics <- data.frame(aic = rep(0,length(population)),
+                              bic = rep(0,length(population)),
+                              model = rep(0,length(population)))
+
+for(i in 1:length(population)){
+  metrics <- AIC_BIC_BinaryRep(as.vector(population[[i]]),
+                  lag_term_vector =  lag_terms,
+                  all_term_vector = all_terms,
+                  train_df = df[1:325,],
+                  dependent_var_name = "d.fl_nonfarm")
+  
+  AIC_BIC_metrics$aic[i] <- metrics[1]
+  AIC_BIC_metrics$bic[i] <- metrics[2]
+  AIC_BIC_metrics$model[i] <- population[i]
+}
+
+AIC_BIC_metrics <- AIC_BIC_metrics %>% 
+  mutate(id = row_number())
+
+
+AIC_top_50 <- AIC_BIC_metrics %>% 
+  arrange(aic) %>% 
+  top_n(15)
+
+BIC_top_50 <- AIC_BIC_metrics %>% 
+  arrange(bic) %>% 
+  top_n(15)
+
+# Check that these are the same top 50 models.
+# length(AIC_top_50$id %in% BIC_top_50$id)
+
+best_models <- AIC_top_50 %>% 
+  select(id, model)
+
+knitr::kable(AIC_top_50 %>% 
+               select(id, aic, bic) %>% 
+               arrange(aic))
+
+rm(AIC_BIC_metrics, AIC_top_50, BIC_top_50)
+```
+
+In the table above, we see the ID of the model in the final population from the genetic algorithm that produced the best in sample AIC and BIC measures. This group of top 15 are the best of the final population ($n=100$). Below is the population plotted and the lag variables that each member of the population is composed of. There are some clear strucures appearing; these red vertical bands are the lag terms that most of the members in the population are composed of. Some of the breaks in the pattern are likely due to mutation which is added to promote "diversity" within the population at each iteration.
+
+```{r Population Models Viz, message = F, warning = F}
+matrix(unlist(population), nrow = 100, ncol = 40) %>% 
+  as.data.frame() %>% 
+  mutate(id = row_number()) %>% 
+  pivot_longer(cols = c(V1:V40)) %>% 
+  ggplot(aes(id, fct_relevel(name, levels = c(paste0("V",1:40))))) +
+  geom_raster(aes(fill = as.factor(value))) +
+  labs(y = "Term", x = "Model ID", fill = "Term Used",
+       title = "Final Population from Genetic Algorithm")+
+  scale_fill_brewer(palette = "Set1", direction = -1) +
+  theme_classic()
+```
+
+
+#### Rolling Window RMSE
+
+Now that we have 15 models to decide on, I will further assess these models with a rolling window root mean square error (RWRMSE). These models are kept organized by an ID that was assigned to each in the population, to no surprise, the final generated 15 models did the best on AIC/BIC criteria. By assessing model performance to predict the next point outside of the training window, we can better pick a model that will forecast correctly. Below is the RWRMSE for each window size (24-60).
+
+```{r RWRMSE Window Size}
+# PICK WINDOW SIZE
+window_sizes <- c(24:60)
+window_sizes <- window_sizes + 24
+
+# Allocate Storage.
+window_size_rwrmse <- rep(0,length(window_sizes))
+
+# Check Window Sizes.
+for(i in 1:length(window_sizes)){
+  model_tmp_bin<- append(best_models$model[[1]], c(rep(T,11),F), after = 10*4)
+  
+  # Use function.
+  source("../TS&F-R-Pack/functions/RWRMSE.R")
+  tmp_rwrmse <- RWRMSE(binary_model = model_tmp_bin,
+       terms_vector = all_terms,
+       dataframe = df[1:325,],
+       window_size = window_sizes[i],
+       dep_var_string = "d.fl_nonfarm",
+       dep_var_position = 8)
+
+  
+  # Store the mean rwrmse.
+ window_size_rwrmse[i] <- mean(tmp_rwrmse,na.rm = T)
+ #print(paste0("Window Size:",window_sizes[i]-24," has an RWRMSE of --> ", window_size_rwrmse[i]))
+}
+
+data.frame(window_size = window_sizes-24, 
+           rwrmse = window_size_rwrmse) %>% 
+  arrange(rwrmse) %>% 
+  knitr::kable()
+```
+
+
+
+And the RWRMSE for each model we saved from the genetic algorithm and AIC/BIC criteria:
+```{r RWRMSE Models}
+
+## PICK BEST MODEL
+# Allocate Storage
+model_rwrmse_vals <- rep(0,nrow(best_models))
+
+# Loop through the best models
+for(i in 1:nrow(best_models)){
+  model_tmp_bin<- append(best_models$model[[i]], c(rep(T,11),F), after = 10*4)
+  
+  # Use function.
+  source("../TS&F-R-Pack/functions/RWRMSE.R")
+  tmp_rwrmse <- RWRMSE(binary_model = model_tmp_bin,
+       terms_vector = all_terms,
+       dataframe = df[1:325,],
+       window_size = 84,
+       dep_var_string = "d.fl_nonfarm",
+       dep_var_position = 8)
+
+  
+  # Store the mean rwrmse.
+  model_rwrmse_vals[i] <- mean(tmp_rwrmse,na.rm = T)
+}
+
+best_models$rwrmse <- model_rwrmse_vals
+
+knitr::kable(best_models %>% 
+               select(id, rwrmse) %>% 
+               arrange(rwrmse))
+
+
+
+```
+
+Now that I have my best models from RWRMSE, I will look at the top 5 and pick a model that is simple or that agrees with conventional thought. Below of the best 5 models:
+
+```{r Model Expressions, results = 'asis'}
+print("Model 89")
+paste(lag_terms[as.logical(best_models$model[[1]])], collapse = "+")
+
+print("Model 93")
+paste(lag_terms[as.logical(best_models$model[[4]])], collapse = "+")
+
+print("Model 99")
+paste(lag_terms[as.logical(best_models$model[[6]])], collapse = "+")
+
+print("Model 91")
+paste(lag_terms[as.logical(best_models$model[[2]])], collapse = "+")
+
+print("Model 95")
+paste(lag_terms[as.logical(best_models$model[[3]])], collapse = "+")
+```
+
+I really like how simple Model 89 is-- no more than 5 lag terms per independent variable. These models all share the same lag terms of our independent variable, which gives me some good confidence that we have a nicely performing structure in place. This is the model I will proceed with for the rest of the analysis. Here is the model:
+
+$\begin{aligned}
+\hat{\Delta \ln (y_t)} =& l_{y,1} \Delta \ln (y_{t-1}) + l_{y,2} \Delta \ln (y_{t-3}) + l_{y,3} \Delta \ln (y_{t-12}) + l_{y,4} \Delta \ln (y_{t-15}) + l_{y,5} \Delta \ln (y_{t-24})+ \\
+& l_{1,1} \Delta \ln (y_{t-1}) + l_{1,2} \Delta \ln (y_{t-2}) + l_{1,3} \Delta \ln (y_{t-3}) + l_{1,4} \Delta \ln (y_{t-15}) + l_{1,5} \Delta \ln (y_{t-24})+\\
+& l_{2,1} \Delta \ln (y_{t-2}) + l_{2,2} \Delta \ln (y_{t-9}) + l_{2,3} \Delta \ln (y_{t-12}) + l_{2,4} \Delta \ln (y_{t-15}) + l_{2,5} \Delta \ln (y_{t-21})+\\
+& l_{3,1} \Delta \ln (y_{t-2}) + l_{3,2} \Delta \ln (y_{t-9}) + l_{3,3} \Delta \ln (y_{t-15}) + l_{3,4} \Delta \ln (y_{t-18})+ \\
+& \sum_{i=1}^{11} \delta_i m_i
+\end{aligned}$
+
+
+Below is the performance of Model 89 for a subset of the data, using a prediction interval constructed using assumptions of normality.
+
+```{r Visualize Performance-1}
+
+best_sol <- append(best_models$model[[1]], c(rep(T,11),F), after = 10*4)
+
+best_model_i1 <- model_from_binary_vector(best_sol,
+                         features_list = all_terms,
+                         training_data = df[1:347,],
+                         dependent_var = "d.fl_nonfarm")
+#summary(best_model_i1)
+
+
+
+best_model_i1_df <- predict(best_model_i1, newdata = df, interval = "prediction", level = 0.95) %>% 
+  as.data.frame()
+
+colnames(best_model_i1_df) <- c("y_hat", "lwr_ci", "upr_ci")
+
+df$y_hat <- best_model_i1_df$y_hat
+df$lwr_ci <- best_model_i1_df$lwr_ci
+df$upr_ci <- best_model_i1_df$upr_ci
+
+# Plot Subset of data with Model 89.
+df %>% 
+  drop_na() %>% 
+  mutate(id = row_number()) %>% 
+  filter(id > nrow(df) - 50) %>% 
+  filter(id < nrow(df) - 25) %>% 
+  ggplot() +
+  geom_ribbon(aes(x = date, ymin = lwr_ci, ymax = upr_ci), alpha = 0.5, fill = "pink")+
+  geom_line(aes(date,y_hat), color = "dark red", alpha = 0.75) +
+  geom_point(aes(date, d.fl_nonfarm), color = "blue", alpha = 0.75) +
+  theme_classic() +
+  labs(title = "Model 1 - Prediction (Red) vs Actual (Blue)",
+       x = "Date", y = "Difference in Log of Florida Non-Farm Employment")
+```
+
+
+# Forecasting
+
+In the previous section we saw a prediction over a subset of the data. This prediction was in differenced log terms of the data, so for our predictions, we will want the real value of Florida non-farm employment. To do this we apply the transform, $y_{t}' = e^{\ln{y_{t-1}} + \hat{y_{t}}}$, to the data. We constructed our confidence interval using assumptions of normality. 
+
+Alternatively, we can use the out of sample residuals from the rolling window calculations to construct a prediction interval empirically. We can compare these results. Below are two plots with prediction intervals constructed using differing methods. Each plot uses Model 89, trained on all of the data before January 1, 2020. The plotted blue point that lies on the dotted black line is the observed value for January, which we are trying to predict.
+
+```{r Fit Empirical}
+source("../TS&F-R-Pack/functions/RWRMSE.R")
+
+rwrmse89 <- RWRMSE(best_models$model[[1]],
+       terms_vector = all_terms,
+       dataframe = df[1:347,],
+       window_size = (60+24),
+       dep_var_string = "d.fl_nonfarm",
+       dep_var_position = 8)
+
+# Get bounds from 2.5 and 97.5 p-tiles.
+emp_resid_quantiles <- quantile(rwrmse89, c(0.025, 0.975), na.rm = T)
+
+### Plot emp PI's
+best_sol <- append(best_models$model[[1]], c(rep(T,11),F), after = 10*4)
+
+best_model_i1 <- model_from_binary_vector(best_sol,
+                         features_list = all_terms,
+                         training_data = df[1:347,],
+                         dependent_var = "d.fl_nonfarm")
+
+best_model_i1_df <- predict(best_model_i1, newdata = df, interval = "prediction", level = 0.95) %>% 
+  as.data.frame()
+
+colnames(best_model_i1_df) <- c("y_hat", "lwr_ci", "upr_ci")
+
+df$y_hat <- best_model_i1_df$y_hat
+df$lwr_ci <- best_model_i1_df$lwr_ci
+df$upr_ci <- best_model_i1_df$upr_ci
+
+
+df[1:348,] %>% 
+  drop_na() %>% 
+  mutate(id = row_number()) %>% 
+  filter(id > nrow(df[1:348,]) - 60) %>% 
+  mutate(fl_nonfarm_pred = exp(log(lag(fl_nonfarm)) + y_hat)) %>% 
+  mutate(fl_nonfarm_upr_ci = exp(log(lag(fl_nonfarm)) + y_hat + emp_resid_quantiles[2])) %>% 
+  mutate(fl_nonfarm_lwr_ci = exp(log(lag(fl_nonfarm)) + y_hat - emp_resid_quantiles[1])) %>% 
+  ggplot() +
+  geom_ribbon(aes(x = date, ymin = fl_nonfarm_lwr_ci, ymax = fl_nonfarm_upr_ci), alpha = 0.5, fill = "pink")+
+  geom_line(aes(date, fl_nonfarm_pred ), color = "red", alpha = 0.75) +
+  geom_point(aes(date, fl_nonfarm), color = "blue") +
+  geom_vline(xintercept = as_datetime("2020-01-01"), lty = 2) +
+  theme_classic() +
+  scale_x_datetime(limits = c(as_datetime("2018-01-01"),as_datetime("2020-01-01")))+
+  labs(x = "Date", y = "FL Non-Farm Employment",
+       title = "Model 89 Prediction (Red) vs Actual (Blue) for FL Non-Farm Employment",
+       caption = "Note: Prediction interval constructed empirically.")
+
+```
+
+```{r Fit Norm}
+### Plot emp PI's
+best_sol <- append(best_models$model[[1]], c(rep(T,11),F), after = 10*4)
+
+best_model_i1 <- model_from_binary_vector(best_sol,
+                         features_list = all_terms,
+                         training_data = df[1:347,],
+                         dependent_var = "d.fl_nonfarm")
+
+best_model_i1_df <- predict(best_model_i1, newdata = df, interval = "prediction", level = 0.95) %>% 
+  as.data.frame()
+
+colnames(best_model_i1_df) <- c("y_hat", "lwr_ci", "upr_ci")
+
+df$y_hat <- best_model_i1_df$y_hat
+df$lwr_ci <- best_model_i1_df$lwr_ci
+df$upr_ci <- best_model_i1_df$upr_ci
+
+
+df[1:348,] %>% 
+  drop_na() %>% 
+  mutate(id = row_number()) %>% 
+  filter(id > nrow(df[1:348,]) - 60) %>% 
+  mutate(fl_nonfarm_pred = exp(log(lag(fl_nonfarm)) + y_hat)) %>% 
+  mutate(fl_nonfarm_upr_ci = exp(log(lag(fl_nonfarm)) + upr_ci)) %>% 
+  mutate(fl_nonfarm_lwr_ci = exp(log(lag(fl_nonfarm)) + lwr_ci)) %>% 
+  ggplot() +
+  geom_ribbon(aes(x = date, ymin = fl_nonfarm_lwr_ci, ymax = fl_nonfarm_upr_ci), alpha = 0.5, fill = "pink")+
+  geom_line(aes(date, fl_nonfarm_pred ), color = "red", alpha = 0.75) +
+  geom_point(aes(date, fl_nonfarm), color = "blue") +
+  geom_vline(xintercept = as_datetime("2020-01-01"), lty = 2) +
+  theme_classic() +
+  scale_x_datetime(limits = c(as_datetime("2018-01-01"),as_datetime("2020-01-01")))+
+  labs(x = "Date", y = "FL Non-Farm Employment",
+       title = "Model 89 Prediction (Red) vs Actual (Blue) for FL Non-Farm Employment",
+       caption = "Note: Prediction interval constructed with normal assumptions.")
+
+```
+
+We can see that the empirically constructed prediction interval is far more conservative than the normally constructed interval. In the normally constructed plot, the target value to forecast *almost* escapes the confidence interval; I would opt to use the empirically constructed interval in this case. The empirical method can be a little more work, but it is constructed off real errors of your model predicting the next value, so in that sense these errors may set more realistic expectations for model performance than a normally constructed plot may.
+
+# Conclusion
+
+In this assignment, a model was built to forecast January non-farm employment for FL, and that goal was achieved. The observed value was inside *both* prediction intervals that were constructed for the forecast. The models were constructed by using a genetic algorithm to traverse the space of all possible models (binary inclusion/exclusion of considered terms/lags). Then those models were assessed multiple times, on different criteria, and were essentially reduced to a handful of models where it was then a simple decision of picking a parsimonious model. 
+
+
+This project was carefully constructed primarily in R to meet the content material for this class, and all the functions I wrote will be available on my GitHub (@Levi-Nicklas) for the sake of reproducible results and transparent research prinicples. 
+
+
+# Appendix
+
+## Model Summary - Model 89
+
+```{r model summary}
+summary(best_model_i1)
+```
+
+
+## Full Data Picture
+```{r Big plot}
+source("../TS&F-R-Pack/functions/RWRMSE.R")
+
+rwrmse89 <- RWRMSE(best_models$model[[1]],
+       terms_vector = all_terms,
+       dataframe = df[1:347,],
+       window_size = (60+24),
+       dep_var_string = "d.fl_nonfarm",
+       dep_var_position = 8)
+
+# Get bounds from 2.5 and 97.5 p-tiles.
+emp_resid_quantiles <- quantile(rwrmse89, c(0.025, 0.975), na.rm = T)
+
+### Plot emp PI's
+best_sol <- append(best_models$model[[1]], c(rep(T,11),F), after = 10*4)
+
+best_model_i1 <- model_from_binary_vector(best_sol,
+                         features_list = all_terms,
+                         training_data = df[1:347,],
+                         dependent_var = "d.fl_nonfarm")
+
+best_model_i1_df <- predict(best_model_i1, newdata = df, interval = "prediction", level = 0.95) %>% 
+  as.data.frame()
+
+colnames(best_model_i1_df) <- c("y_hat", "lwr_ci", "upr_ci")
+
+df$y_hat <- best_model_i1_df$y_hat
+df$lwr_ci <- best_model_i1_df$lwr_ci
+df$upr_ci <- best_model_i1_df$upr_ci
+
+
+df[1:348,] %>% 
+  drop_na() %>% 
+  mutate(id = row_number()) %>% 
+  mutate(fl_nonfarm_pred = exp(log(lag(fl_nonfarm)) + y_hat)) %>% 
+  mutate(fl_nonfarm_upr_ci = exp(log(lag(fl_nonfarm)) + y_hat + emp_resid_quantiles[2])) %>% 
+  mutate(fl_nonfarm_lwr_ci = exp(log(lag(fl_nonfarm)) + y_hat - emp_resid_quantiles[1])) %>% 
+  ggplot() +
+  geom_ribbon(aes(x = date, ymin = fl_nonfarm_lwr_ci, ymax = fl_nonfarm_upr_ci), alpha = 0.5, fill = "pink")+
+  geom_line(aes(date, fl_nonfarm_pred ), color = "red", alpha = 0.75) +
+  geom_point(aes(date, fl_nonfarm), color = "blue", alpha = 0.5) +
+  geom_vline(xintercept = as_datetime("2020-01-01"), lty = 2) +
+  theme_classic() +
+  #scale_x_datetime(limits = c(as_datetime("2018-01-01"),as_datetime("2020-01-01")))+
+  labs(x = "Date", y = "FL Non-Farm Employment",
+       title = "Model 89 Prediction (Red) vs Actual (Blue) for FL Non-Farm Employment",
+       caption = "Note: Prediction interval constructed empirically.")
+
+
+```
