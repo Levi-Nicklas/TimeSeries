@@ -38,5 +38,9 @@ build_seasonal_indicators <- function(seasonality){
     biannual_list <- data.frame(halfs = biannual_list)
     
     return(biannual_list)
+  } else if(seasonality == "weekly"){
+    weekly_list <- c("monday","tuesday","wednesday","thursday","friday")
+    
+    weekly_list <- data.frame(day_of_week = weekly_list)
   }
 }

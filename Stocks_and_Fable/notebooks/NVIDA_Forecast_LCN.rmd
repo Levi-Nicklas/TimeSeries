@@ -1,0 +1,55 @@
+---
+title: "NVIDIA"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(fable)
+library(tsibble)
+library(tsibbledata)
+library(lubridate)
+library(dplyr)
+library(here)
+
+nvda <- readr::read_csv(here::here("Stocks_and_Fable/data/NVDA_monthly.csv"))
+```
+
+
+# Data 
+
+# Time Series Analysis
+
+```{r}
+aus_retail %>%
+  filter(
+    State %in% c("New South Wales", "Victoria"),
+    Industry == "Department stores"
+  ) %>% 
+  model(
+    ets = ETS(box_cox(Turnover, 0.3)),
+    arima = ARIMA(log(Turnover)),
+    snaive = SNAIVE(Turnover)
+  ) %>%
+  forecast(h = "2 years") %>% 
+  autoplot(filter(aus_retail, year(Month) > 2010), level = NULL)
+```
+
+```{r}
+ts_nvda <- nvda[1:268,] %>%
+  select(Date,High) %>% 
+  mutate(Date = yearmonth(Date)) %>% 
+  as_tsibble(index = Date)
+ 
+ts_nvda %>% 
+  model(
+    ets = ETS(High),
+    arima = ARIMA(log(High)),
+    snaive = SNAIVE(High)
+  ) %>%
+  forecast(h = "2 years") %>% 
+  autoplot(filter(ts_nvda, year(Date)>2018), level = 0.8) +
+  theme_light()
+
+
+```

@@ -23,7 +23,7 @@ generate_lag_terms <- function(var_names, max_lags){
                                        ncol = num_vars))
   
   # Get required functions.
-  source("../TS&F-R-Pack/functions/build_lag_terms.R")
+  source("Functions/build_lag_terms.R")
   
   # restructure and store the terms.
   for(i in 1:length(var_names)){

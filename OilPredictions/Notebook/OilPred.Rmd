@@ -1,0 +1,22 @@
+---
+title: "Oil Predictions"
+author: "Levi C. Nicklas"
+date: "8/7/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+
+```
+
+#Oil Predictions
+
+In the midst of COVID-19, travel has gone down dramatically and impacted the price of oil. Both airline and automobile travel has seen declines. As the market begins to rebound and tavel becomes safer, either due to safety precautions or COVID numbers declining. To forecast oil prices, we need data on oil prices and any independent variables we wish to include. For this data, [FRED](https://fred.stlouisfed.org/) (Federal Reserve Economic Data) is a great resource. Form this data resource I cureated a handful of time series which will be useful in the prediction of oil prices. After reading some news articles, some buisness jounral notes, and some wikipedia I arrived at the following time series: 
+
+Code | Description | Time Range
+-----|-------------|------------
+ | Global Price of Brent Oil | 1/1990 to 6/2020
+ | Air Revenue Passenger Miles |1/2000 to 4/2020

@@ -14,12 +14,14 @@ AIC_BIC_BinaryRep <- function(binary_vector, lag_term_vector, all_term_vector, t
   ## train_df - data frame with training data.
   ## dependent_var_name - a string of the name for the dependent variable.
   
-  source("../TS&F-R-Pack/functions/model_from_binary_vector.R")
+  source("Functions/model_from_binary_vector.R")
   
   # Get the number of terms.
   num_terms <- length(lag_term_vector)
   # Add the set seasonal indicators I want to the binary vector.
-  binary_vector <- append(binary_vector, c(rep(T,11),F), after = num_terms)
+  #binary_vector <- append(binary_vector,
+  #                        c(rep(T,4),F),
+  #                        after = num_terms)
   
   model_t <- model_from_binary_vector(binary_vector = binary_vector, 
                                       features_list = all_term_vector,

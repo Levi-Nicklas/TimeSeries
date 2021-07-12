@@ -1,0 +1,95 @@
+---
+title: "Disney Wait Times"
+author: "Levi C. Nicklas"
+output:
+  html_document:
+    theme: united
+    toc: yes
+    toc_float:
+      collapsed: no
+---
+
+```{r Setup, include = FALSE}
+library(tidyverse)
+library(readxl)
+library(ggthemes)
+library(lubridate)
+library(feasts)
+library(tsibbledata)
+library(tsibble)
+```
+
+
+In this notebook we will take a in depth look at Disney World wait times. 
+
+## Splash Mountain
+
+![](https://external-content.duckduckgo.com/iu/?u=http%3A%2F%2F1.bp.blogspot.com%2F-_LSILuiWnhM%2FUf6lAf8cH-I%2FAAAAAAAAI98%2FeLRkdxHyqGE%2Fs1600%2FSplashMountainposter.jpg&f=1&nofb=1)
+
+First I am going to take a look at splash mountain wait times. Looking at this data I am immediately curious about the disparity in the posted vs. actual wait times. When you wait on a 45 min ride, some times you get to the ride in 30 mins and some times it takes an hour; should there be a better estimate at wait times? Is the current posted wait time good enough?
+
+```{r, message = F}
+splash_mtn <- readr::read_csv("../raw-data/splash_mountain.csv")
+colnames(splash_mtn) <- c("date","datetime","actual","posted")
+
+splash_mtn %>% 
+  pivot_longer(cols = c("actual", "posted")) %>% 
+  mutate(datetime = lubridate::as_date(datetime)) %>% 
+  filter(!is.na(value)) %>% 
+  filter(value > 0) %>% 
+  ggplot(aes(datetime, value, color = as.factor(name))) + 
+  geom_line() + 
+  facet_wrap(~name, nrow = 2, ncol = 1) +
+  labs(color = "", title = "Splash Mountain - Wait times")+
+  scale_color_brewer(palette = "Set1")+
+  ggthemes::theme_fivethirtyeight()
+```
+
+At first look, it appears that the wait times that are posted are often higher than the actual wait times. Perhaps this is a matter of managing expectations. If we decompose the time series maybe we will see something interesting. I expect to see some seasonality where the wait times are higher in the summer than the winter. 
+
+```{r}
+splash_mtn_tdy <- splash_mtn %>% 
+  pivot_longer(cols = c("actual", "posted"))
+
+# Clean out duplicates
+splash_mtn_tdy %>% 
+  filter(name == "actual") %>% 
+  drop_na() %>% 
+  duplicates()
+
+# Clean out any duplicate or incorrect data.
+splash_mtn_tdy_act <- splash_mtn_tdy %>% 
+  filter(name == "actual") %>% 
+  mutate(flag = ifelse(lubridate::mdy(date) == lubridate::date(datetime),1,0)) %>% 
+  mutate(datetime = lubridate::ymd_hm(substring(datetime,1,16))) %>% 
+  filter(flag == 1) %>% 
+  drop_na() %>% 
+  group_by(datetime) %>% 
+  summarize(value = mean(value))
+  
+
+dcmp_spl_mtn <- splash_mtn_tdy_act[1:1825,] %>% 
+  as_tsibble() %>% 
+  tsibble::fill_gaps() %>% 
+  mutate(value = ifelse(is.na(value),0,value)) %>% 
+  mutate(month = lubridate::month(datetime)) %>%
+  model(STL(value ~ season("month", window = "periodic"))) 
+  
+ 
+components(dcmp_spl_mtn) %>% autoplot()
+
+splash_mtn_tdy_act[1:1825,] %>% 
+  as_tsibble() %>% 
+  tsibble::fill_gaps() %>% 
+  mutate(value = ifelse(is.na(value),0,value)) %>% 
+  mutate(month = lubridate::month(datetime)) %>%
+  gg_season(value)
+
+```
+
+
+
+
+
+
+
